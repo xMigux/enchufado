@@ -4,6 +4,10 @@ Integración para Home Assistant que muestra el consumo eléctrico y su coste PV
 
 Los precios PVPC se obtienen de la API pública de [ESIOS/REE](https://api.esios.ree.es/).
 
+## Créditos
+
+La lógica de estadísticas y persistencia de datos está derivada de [pvpc_energy](https://github.com/yinyang17/pvpc_energy) de [@yinyang17](https://github.com/yinyang17), usada bajo licencia MIT.
+
 ## ¿Qué hace?
 
 - Descarga el consumo horario desde **Datadis** (válido para e-distribución y otras)

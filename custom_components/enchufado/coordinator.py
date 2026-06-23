@@ -1,4 +1,8 @@
-"""Coordinator for Enchufado integration."""
+"""Coordinator for Enchufado integration.
+
+Statistics handling and data persistence derived from pvpc_energy by yinyang17
+(https://github.com/yinyang17/pvpc_energy), used under MIT licence.
+"""
 import datetime
 import logging
 import time

@@ -1,4 +1,7 @@
-"""REE/ESIOS API client for PVPC prices."""
+"""REE/ESIOS API client for PVPC prices.
+
+Derived from pvpc_energy by yinyang17 (https://github.com/yinyang17/pvpc_energy).
+"""
 import datetime
 import aiohttp
 import logging
