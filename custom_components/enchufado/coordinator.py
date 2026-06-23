@@ -123,6 +123,7 @@ class EnchufadoCoordinator:
     @staticmethod
     async def import_energy_data(hass, force_update=False):
         _LOGGER.debug("import_energy_data(force_update=%s)", force_update)
+        _LOGGER.debug("energy_data path: %s (exists=%s)", ENERGY_FILE, exists(ENERGY_FILE))
 
         # Datadis rejects months whose 1st day exceeds the 2-year window.
         # Advancing by 1 month keeps us safely within the limit.
