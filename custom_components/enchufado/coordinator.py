@@ -443,9 +443,10 @@ class EnchufadoCoordinator:
         if not consumptions:
             return existing
 
-        existing_starts = {p["start_date"] for p in existing}
+        existing_by_start = {p["start_date"]: p for p in existing}
         start_date = datetime.datetime.fromtimestamp(min(consumptions.keys())).date()
         end_date = datetime.datetime.fromtimestamp(max(consumptions.keys())).date()
+        today = datetime.date.today()
 
         for p in EnchufadoCoordinator.generate_monthly_periods(
             start_date,
@@ -453,12 +454,22 @@ class EnchufadoCoordinator:
             EnchufadoCoordinator.power_high or 4.6,
             EnchufadoCoordinator.power_low or 4.6,
         ):
-            if p["start_date"] not in existing_starts:
-                existing.append(p)
-                existing_starts.add(p["start_date"])
+            if p["start_date"] not in existing_by_start:
+                existing_by_start[p["start_date"]] = p
+            else:
+                existing_p = existing_by_start[p["start_date"]]
+                # Current month is incomplete: refresh end_date and force recalculation
+                if p["start_date"].month == today.month and p["start_date"].year == today.year:
+                    existing_p["end_date"] = p["end_date"]
+                    existing_p.pop("total_cost", None)
+                    existing_p.pop("total_consumption", None)
+                    existing_p.pop("power_cost", None)
+                    existing_p.pop("energy_cost", None)
+                    existing_p.pop("rent_cost", None)
+                    existing_p.pop("tax_cost", None)
 
-        existing.sort(key=lambda p: p["start_date"])
-        return existing
+        result = sorted(existing_by_start.values(), key=lambda p: p["start_date"])
+        return result
 
     @staticmethod
     async def get_bill(hass, billing_period, consumptions):
