@@ -10,20 +10,21 @@ La lógica de estadísticas y persistencia de datos está derivada de [pvpc_ener
 
 ## ¿Qué hace?
 
-- Descarga el consumo horario desde **Datadis** (válido para e-distribución y otras)
+- Descarga el consumo horario desde **Datadis** (compatible con e-distribución y otras distribuidoras)
 - Descarga los precios horarios **PVPC** desde ESIOS/REE
 - Crea estadísticas en el **panel de energía** de Home Assistant: consumo (kWh) y coste (€)
+- Simula facturas mensuales usando el comparador oficial de la CNMC y publica el resultado como estado `enchufado.current_bill`
 - Se actualiza automáticamente cada día a las 6:30
 
 ## Requisitos
 
 - Cuenta en [datadis.es](https://datadis.es) (gratuita)
-- Tu **CUPS** (aparece en la factura de la luz)
+- Home Assistant 2023.1 o superior
 
 ## Instalación vía HACS
 
-1. Añade este repositorio como repositorio personalizado en HACS
-2. Instala "Enchufado"
+1. Añade este repositorio como repositorio personalizado en HACS (categoría: Integración)
+2. Instala **Enchufado**
 3. Reinicia Home Assistant
 4. Ve a **Ajustes → Dispositivos y servicios → Añadir integración → Enchufado**
 
@@ -35,31 +36,40 @@ El proceso de configuración tiene dos pasos:
 
 | Campo | Descripción |
 |-------|-------------|
-| Usuario Datadis | Tu NIF/NIE (el mismo que usas en datadis.es) |
-| Contraseña Datadis | Tu contraseña de datadis.es |
+| Usuario | Tu NIF/NIE (el mismo que usas en datadis.es) |
+| Contraseña | Tu contraseña de datadis.es |
 | NIF autorizado | Opcional, si el CUPS está a nombre de otra persona |
 
 **Paso 2 — Selección de suministro:**
 
-| Campo | Descripción |
-|-------|-------------|
-| CUPS | Tu punto de suministro (se carga automáticamente desde Datadis) |
-| Potencia P1/P2 (kW) | Potencia contratada en horas punta/llano |
-| Potencia P3 (kW) | Potencia contratada en horas valle |
-| Código postal | Opcional |
-| Facturas a mostrar | Número de facturas en el resumen |
+Se muestran los suministros encontrados en tu cuenta. Al seleccionar uno, la potencia contratada y el código postal se obtienen automáticamente desde Datadis.
 
-## Panel de energía
+## Entidades creadas
 
-Una vez configurado, ve a **Ajustes → Panel de energía** y añade las estadísticas:
+| Entidad | Tipo | Descripción |
+|---------|------|-------------|
+| `number.facturas_a_mostrar` | Slider (1–24) | Número de facturas que se incluyen en `enchufado.current_bill` |
+
+## Estadísticas del panel de energía
+
+Ve a **Ajustes → Panel de energía** y añade:
+
 - `enchufado:consumption` — Consumo en kWh
 - `enchufado:cost` — Coste en €
 
+## Simulación de facturas
+
+La entidad `enchufado.current_bill` contiene el importe de la última factura simulada y un atributo `bills` con el desglose de las N facturas más recientes (N se controla con el slider `Facturas a mostrar`).
+
+Cada factura incluye: importe total, coste de potencia, coste de energía, alquiler de contador e IVA.
+
 ## Servicios disponibles
 
-- `enchufado.import_energy_data` — Importa datos nuevos
-- `enchufado.force_import_energy_data` — Fuerza reimportación completa
-- `enchufado.reprocess_energy_data` — Regenera estadísticas desde datos locales
+| Servicio | Descripción |
+|----------|-------------|
+| `enchufado.import_energy_data` | Importa datos nuevos desde Datadis/ESIOS |
+| `enchufado.force_import_energy_data` | Fuerza reimportación completa ignorando caché |
+| `enchufado.reprocess_energy_data` | Regenera estadísticas desde datos locales |
 
 ## Licencia
 

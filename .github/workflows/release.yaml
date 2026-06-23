@@ -13,6 +13,7 @@ jobs:
         run: |
           VERSION=$(jq -r .version custom_components/enchufado/manifest.json)
           TAG="${GITHUB_REF#refs/tags/}"
+          TAG="${TAG#v}"
           if [ "$VERSION" != "$TAG" ]; then
             echo "Manifest version ($VERSION) does not match tag ($TAG)"
             exit 1
