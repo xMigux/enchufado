@@ -113,11 +113,13 @@ class EnchufadoCoordinator:
     async def import_energy_data(hass, force_update=False):
         _LOGGER.debug("import_energy_data(force_update=%s)", force_update)
 
-        start_date = datetime.datetime(
-            year=datetime.date.today().year - 2,
-            month=datetime.date.today().month,
-            day=1,
-        ).date()
+        # Datadis rejects months whose 1st day exceeds the 2-year window.
+        # Advancing by 1 month keeps us safely within the limit.
+        _today = datetime.date.today()
+        if _today.month == 12:
+            start_date = datetime.date(_today.year - 1, 1, 1)
+        else:
+            start_date = datetime.date(_today.year - 2, _today.month + 1, 1)
         end_date = datetime.date.today() - datetime.timedelta(days=2)
 
         consumptions, prices = await EnchufadoCoordinator.load_energy_data(hass, ENERGY_FILE, start_date)
