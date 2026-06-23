@@ -29,7 +29,7 @@ async def async_setup_entry(hass, entry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    await hass.async_add_executor_job(_setup_services, hass)
+    _setup_services(hass)
     hass.async_create_task(EnchufadoCoordinator.import_energy_data(hass))
     return True
 
