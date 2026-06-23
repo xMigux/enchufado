@@ -21,6 +21,7 @@ from .const import (
     CONF_POINT_TYPE,
     CONF_POWER_HIGH,
     CONF_POWER_LOW,
+    CONF_ZIP_CODE,
     DOMAIN,
 )
 from .datadis import async_get_contract_detail, async_get_supplies, async_login
@@ -112,6 +113,7 @@ class EnchufadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_POINT_TYPE: supply["point_type"],
                     CONF_POWER_HIGH: power_high,
                     CONF_POWER_LOW: power_low,
+                    CONF_ZIP_CODE: supply.get("postal_code") or "",
                 }
             )
             return self.async_create_entry(title=cups_value, data=self.data)

@@ -19,6 +19,9 @@ from homeassistant.components.recorder.statistics import (
 from homeassistant.const import CURRENCY_EURO, UnitOfEnergy
 from homeassistant.util.unit_conversion import EnergyConverter
 
+from homeassistant.helpers import entity_registry as er
+
+from .cnmc import calculate_bill
 from .const import (
     BILLING_PERIODS_FILE,
     CONF_AUTHORIZED_NIF,
@@ -29,6 +32,7 @@ from .const import (
     CONF_POINT_TYPE,
     CONF_POWER_HIGH,
     CONF_POWER_LOW,
+    CONF_ZIP_CODE,
     CONSUMPTION_STATISTIC_ID,
     CONSUMPTION_STATISTIC_NAME,
     COST_STATISTIC_ID,
@@ -51,6 +55,7 @@ class EnchufadoCoordinator:
     authorized_nif = None
     power_high = None
     power_low = None
+    zip_code = None
 
     consumption_metadata = StatisticMetaData(
         name=CONSUMPTION_STATISTIC_NAME,
@@ -80,6 +85,7 @@ class EnchufadoCoordinator:
         EnchufadoCoordinator.authorized_nif = config.get(CONF_AUTHORIZED_NIF)
         EnchufadoCoordinator.power_high = config.get(CONF_POWER_HIGH, 4.6)
         EnchufadoCoordinator.power_low = config.get(CONF_POWER_LOW, 4.6)
+        EnchufadoCoordinator.zip_code = config.get(CONF_ZIP_CODE, "")
 
         Datadis.setup(
             username=config[CONF_DATADIS_USER],
@@ -214,6 +220,10 @@ class EnchufadoCoordinator:
                     cost_stats,
                 )
 
+        # --- Billing simulation via CNMC ---
+        billing_periods = await EnchufadoCoordinator.get_billing_periods(hass, consumptions)
+        await EnchufadoCoordinator.calculate_bills(hass, billing_periods, consumptions, force_update)
+
         _LOGGER.debug("import_energy_data() done")
 
     @staticmethod
@@ -340,3 +350,185 @@ class EnchufadoCoordinator:
             timestamp += 3600
 
         return consumption_statistics, cost_statistics
+
+    # ------------------------------------------------------------------ billing
+
+    @staticmethod
+    def generate_monthly_periods(start_date, end_date, power_high, power_low):
+        """Return a list of monthly billing-period dicts covering start_date..end_date."""
+        periods = []
+        current = start_date.replace(day=1)
+        while current <= end_date:
+            if current.month == 12:
+                next_month = current.replace(year=current.year + 1, month=1, day=1)
+            else:
+                next_month = current.replace(month=current.month + 1, day=1)
+            period_end = min(next_month - datetime.timedelta(days=1), end_date)
+            periods.append(
+                {
+                    "start_date": current,
+                    "end_date": period_end,
+                    "power_high": power_high,
+                    "power_low": power_low,
+                }
+            )
+            current = next_month
+        return periods
+
+    @staticmethod
+    def load_billing_periods(file_path):
+        """Read billing periods from CSV (sync — call via async_add_executor_job)."""
+        periods = []
+        if not exists(file_path):
+            return periods
+        with open(file_path, "r") as f:
+            header = f.readline().rstrip("\n").split(",")
+            for line in f:
+                parts = line.rstrip("\n").split(",")
+                row = dict(zip(header, parts))
+                try:
+                    period = {
+                        "start_date": datetime.datetime.strptime(row["start_date"], "%Y-%m-%d").date(),
+                        "end_date": datetime.datetime.strptime(row["end_date"], "%Y-%m-%d").date(),
+                        "power_high": float(row["power_high"]),
+                        "power_low": float(row["power_low"]),
+                    }
+                    for field in ("total_cost", "total_consumption", "power_cost", "energy_cost", "rent_cost", "tax_cost"):
+                        val = row.get(field, "")
+                        period[field] = val if val in ("", "-") else float(val)
+                    periods.append(period)
+                except (ValueError, KeyError) as exc:
+                    _LOGGER.warning("load_billing_periods: skipping row: %s (%s)", line.strip(), exc)
+        return periods
+
+    @staticmethod
+    def save_billing_periods(file_path, billing_periods):
+        """Write billing periods to CSV (sync — call via async_add_executor_job)."""
+        with open(file_path, "w") as f:
+            f.write(
+                "start_date,end_date,power_high,power_low,"
+                "total_cost,total_consumption,power_cost,energy_cost,rent_cost,tax_cost\n"
+            )
+            for p in billing_periods:
+                f.write(
+                    f"{p['start_date'].isoformat()},{p['end_date'].isoformat()},"
+                    f"{p['power_high']},{p['power_low']},"
+                    f"{p.get('total_cost', '')},"
+                    f"{p.get('total_consumption', '')},"
+                    f"{p.get('power_cost', '')},"
+                    f"{p.get('energy_cost', '')},"
+                    f"{p.get('rent_cost', '')},"
+                    f"{p.get('tax_cost', '')}\n"
+                )
+
+    @staticmethod
+    async def get_billing_periods(hass, consumptions):
+        """Load existing periods from CSV and extend with any new calendar months."""
+        existing = await hass.async_add_executor_job(
+            EnchufadoCoordinator.load_billing_periods, BILLING_PERIODS_FILE
+        )
+        if not consumptions:
+            return existing
+
+        existing_starts = {p["start_date"] for p in existing}
+        start_date = datetime.datetime.fromtimestamp(min(consumptions.keys())).date()
+        end_date = datetime.datetime.fromtimestamp(max(consumptions.keys())).date()
+
+        for p in EnchufadoCoordinator.generate_monthly_periods(
+            start_date,
+            end_date,
+            EnchufadoCoordinator.power_high or 4.6,
+            EnchufadoCoordinator.power_low or 4.6,
+        ):
+            if p["start_date"] not in existing_starts:
+                existing.append(p)
+                existing_starts.add(p["start_date"])
+
+        existing.sort(key=lambda p: p["start_date"])
+        return existing
+
+    @staticmethod
+    async def get_bill(hass, billing_period, consumptions):
+        """Extract consumption for one billing period and request CNMC estimate."""
+        start_ts = int(time.mktime(billing_period["start_date"].timetuple()))
+        end_ts = int(time.mktime(billing_period["end_date"].timetuple())) + 86399
+
+        period_consumptions = {
+            ts: consumptions[ts]["value"]
+            for ts in consumptions
+            if start_ts <= ts <= end_ts
+        }
+
+        if not period_consumptions:
+            return billing_period
+
+        updated, _ = await calculate_bill(
+            billing_period,
+            EnchufadoCoordinator.cups,
+            period_consumptions,
+            EnchufadoCoordinator.zip_code or "",
+        )
+        return updated
+
+    @staticmethod
+    async def calculate_bills(hass, billing_periods, consumptions, force_update=False):
+        """Calculate CNMC bills for recent periods and publish enchufado.current_bill state."""
+        if not billing_periods or not consumptions:
+            return
+
+        bills_number = 5
+        ent_registry = er.async_get(hass)
+        entity_id = ent_registry.async_get_entity_id("number", DOMAIN, "enchufado_bills_number")
+        if entity_id:
+            state = hass.states.get(entity_id)
+            if state and state.state not in (None, "unknown", "unavailable"):
+                try:
+                    bills_number = int(float(state.state))
+                except ValueError:
+                    pass
+
+        changed = False
+        for period in billing_periods[-bills_number:]:
+            has_cost = "total_cost" in period and period["total_cost"] not in ("", None)
+            if force_update or not has_cost:
+                await EnchufadoCoordinator.get_bill(hass, period, consumptions)
+                changed = True
+
+        if changed:
+            await hass.async_add_executor_job(
+                EnchufadoCoordinator.save_billing_periods, BILLING_PERIODS_FILE, billing_periods
+            )
+
+        calculated = [
+            p for p in billing_periods
+            if "total_cost" in p and p["total_cost"] not in ("", None)
+        ][-bills_number:]
+
+        if not calculated:
+            return
+
+        latest = calculated[-1]
+        total_cost = latest.get("total_cost", "-")
+        state_value = f"{total_cost:.2f} €" if isinstance(total_cost, (int, float)) else str(total_cost)
+
+        hass.states.async_set(
+            CURRENT_BILL_STATE,
+            state_value,
+            {
+                "friendly_name": "Factura actual",
+                "bills": [
+                    {
+                        "start": p["start_date"].isoformat(),
+                        "end": p["end_date"].isoformat(),
+                        "total_cost": p.get("total_cost"),
+                        "total_consumption": p.get("total_consumption"),
+                        "power_cost": p.get("power_cost"),
+                        "energy_cost": p.get("energy_cost"),
+                        "rent_cost": p.get("rent_cost"),
+                        "tax_cost": p.get("tax_cost"),
+                    }
+                    for p in calculated
+                ],
+            },
+        )
+        _LOGGER.info("calculate_bills: published %d bills, latest=%.2f €", len(calculated), total_cost if isinstance(total_cost, (int, float)) else 0)

@@ -10,6 +10,7 @@ CONF_POINT_TYPE = "point_type"
 CONF_AUTHORIZED_NIF = "authorized_nif"
 CONF_POWER_HIGH = "power_high"
 CONF_POWER_LOW = "power_low"
+CONF_ZIP_CODE = "zip_code"
 
 # Statistics
 CONSUMPTION_STATISTIC_ID = f"{DOMAIN}:consumption"
