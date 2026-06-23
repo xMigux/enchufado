@@ -18,6 +18,8 @@ async def async_setup_entry(hass, entry) -> bool:
     hass_data = dict(entry.data)
     EnchufadoCoordinator.set_config(hass_data, hass)
 
+    await hass.async_add_executor_job(_ensure_data_dir)
+
     unsub = entry.add_update_listener(options_update_listener)
     hass_data["unsub_options_update_listener"] = unsub
     hass.data[DOMAIN][entry.entry_id] = hass_data
@@ -25,6 +27,11 @@ async def async_setup_entry(hass, entry) -> bool:
     await hass.async_add_executor_job(_setup_services, hass)
     hass.async_create_task(EnchufadoCoordinator.import_energy_data(hass))
     return True
+
+
+def _ensure_data_dir():
+    if not exists(USER_FILES_PATH):
+        makedirs(USER_FILES_PATH)
 
 
 def _setup_services(hass) -> None:
@@ -58,7 +65,5 @@ async def async_unload_entry(hass, entry) -> bool:
 
 
 def setup(hass, config):
-    if not exists(USER_FILES_PATH):
-        makedirs(USER_FILES_PATH)
     hass.data.setdefault(DOMAIN, {})
     return True
