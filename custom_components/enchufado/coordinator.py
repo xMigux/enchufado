@@ -484,8 +484,16 @@ class EnchufadoCoordinator:
         }
 
         if not period_consumptions:
+            _LOGGER.info(
+                "get_bill: no consumption data for %s→%s",
+                billing_period["start_date"], billing_period["end_date"],
+            )
             return billing_period
 
+        _LOGGER.info(
+            "get_bill: calling CNMC for %s→%s (%d hours)",
+            billing_period["start_date"], billing_period["end_date"], len(period_consumptions),
+        )
         updated, _ = await calculate_bill(
             billing_period,
             EnchufadoCoordinator.cups,
@@ -511,11 +519,21 @@ class EnchufadoCoordinator:
                 except ValueError:
                     pass
 
+        _LOGGER.info(
+            "calculate_bills: processing %d periods, bills_number=%d",
+            len(billing_periods), bills_number,
+        )
         changed = False
         for period in billing_periods[-bills_number:]:
             has_cost = "total_cost" in period and period["total_cost"] not in ("", None)
             if force_update or not has_cost:
-                await EnchufadoCoordinator.get_bill(hass, period, consumptions)
+                try:
+                    await EnchufadoCoordinator.get_bill(hass, period, consumptions)
+                except Exception as err:
+                    _LOGGER.error(
+                        "calculate_bills: error processing %s: %s",
+                        period["start_date"], err,
+                    )
                 changed = True
 
         if changed:

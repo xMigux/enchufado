@@ -88,66 +88,70 @@ async def calculate_bill(billing_period: dict, cups: str, consumptions: dict, zi
 
     encoded = base64.b64encode(csv_data.encode("utf-8")).decode("utf-8")
 
-    async with aiohttp.ClientSession() as session:
-        # Step 1: upload consumption curve
-        energy_file = None
-        async with session.post(
-            _UPLOAD_URL,
-            headers=_HEADERS,
-            json={"file": f"data:text/csv;base64,{encoded}"},
-            ssl=False,
-        ) as resp:
-            response_text = await resp.text()
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Step 1: upload consumption curve
+            energy_file = None
+            async with session.post(
+                _UPLOAD_URL,
+                headers=_HEADERS,
+                json={"file": f"data:text/csv;base64,{encoded}"},
+                ssl=False,
+            ) as resp:
+                response_text = await resp.text()
 
-        if response_text.startswith(_MSG_OLD_FILE):
-            billing_period["total_cost"] = "-"
-            return billing_period, csv_data
-        elif response_text.startswith(_MSG_NO_DATA):
-            _LOGGER.info("CNMC: no data for this period")
-            return billing_period, csv_data
-        elif response_text.startswith(_MSG_BAD_FILE) or response_text.startswith("Aviso:"):
-            _LOGGER.info("CNMC: API warning: %s", response_text[:100])
-            return billing_period, csv_data
+            if response_text.startswith(_MSG_OLD_FILE):
+                _LOGGER.info("CNMC: period %s is too old for the API", billing_period["start_date"])
+                billing_period["total_cost"] = "-"
+                return billing_period, csv_data
+            elif response_text.startswith(_MSG_NO_DATA):
+                _LOGGER.info("CNMC: no data for period %s", billing_period["start_date"])
+                return billing_period, csv_data
+            elif response_text.startswith(_MSG_BAD_FILE) or response_text.startswith("Aviso:"):
+                _LOGGER.warning("CNMC: API warning for %s: %s", billing_period["start_date"], response_text[:100])
+                return billing_period, csv_data
 
-        match = re.search(r"^(\D+\d+)-.*$", response_text)
-        if match:
-            energy_file = match.group(1)
+            match = re.search(r"^(\D+\d+)-.*$", response_text)
+            if match:
+                energy_file = match.group(1)
 
-        if not energy_file:
-            _LOGGER.warning("CNMC: could not parse energy file ID from: %s", response_text[:100])
-            return billing_period, csv_data
+            if not energy_file:
+                _LOGGER.warning("CNMC: could not parse energy file ID from: %s", response_text[:100])
+                return billing_period, csv_data
 
-        # Step 2: request bill calculation
-        url = _BILL_URL.format(
-            zip_code=zip_code,
-            power_high=billing_period["power_high"],
-            power_low=billing_period["power_low"],
-            energy_file=energy_file,
-            start_date=(billing_period["start_date"] - datetime.timedelta(days=1)).isoformat(),
-            end_date=billing_period["end_date"].isoformat(),
-            start_timestamp=int(time.mktime((billing_period["start_date"] - datetime.timedelta(days=1)).timetuple())) * 1000,
-            end_timestamp=int(time.mktime(billing_period["end_date"].timetuple())) * 1000,
-        )
-        async with session.get(url, ssl=False) as resp:
-            bill = await resp.json()
+            # Step 2: request bill calculation
+            url = _BILL_URL.format(
+                zip_code=zip_code,
+                power_high=billing_period["power_high"],
+                power_low=billing_period["power_low"],
+                energy_file=energy_file,
+                start_date=(billing_period["start_date"] - datetime.timedelta(days=1)).isoformat(),
+                end_date=billing_period["end_date"].isoformat(),
+                start_timestamp=int(time.mktime((billing_period["start_date"] - datetime.timedelta(days=1)).timetuple())) * 1000,
+                end_timestamp=int(time.mktime(billing_period["end_date"].timetuple())) * 1000,
+            )
+            async with session.get(url, ssl=False) as resp:
+                bill = await resp.json()
 
-        gasto = bill.get("graficoGastoTotalActual")
-        if gasto:
-            consumo_diario = bill.get("graficaConsumoDiario", {}).get("consumosDiarios", [])
-            if consumo_diario:
-                billing_period["start_date"] = datetime.datetime.strptime(
-                    consumo_diario[0]["fecha"], "%d/%m/%Y"
-                ).date()
-                billing_period["end_date"] = datetime.datetime.strptime(
-                    consumo_diario[-1]["fecha"], "%d/%m/%Y"
-                ).date()
-            billing_period["total_cost"] = gasto["importeTotal"]
-            billing_period["power_cost"] = gasto["importePotencia"]
-            billing_period["energy_cost"] = gasto["importeEnergia"]
-            billing_period["rent_cost"] = gasto["importeAlquiler"]
-            billing_period["tax_cost"] = gasto["importeIVA"]
-            _LOGGER.debug("CNMC: bill result %s", gasto)
-        else:
-            _LOGGER.debug("CNMC: unexpected bill response: %s", str(bill)[:200])
+            gasto = bill.get("graficoGastoTotalActual")
+            if gasto:
+                consumo_diario = bill.get("graficaConsumoDiario", {}).get("consumosDiarios", [])
+                if consumo_diario:
+                    billing_period["start_date"] = datetime.datetime.strptime(
+                        consumo_diario[0]["fecha"], "%d/%m/%Y"
+                    ).date()
+                    billing_period["end_date"] = datetime.datetime.strptime(
+                        consumo_diario[-1]["fecha"], "%d/%m/%Y"
+                    ).date()
+                billing_period["total_cost"] = gasto["importeTotal"]
+                billing_period["power_cost"] = gasto["importePotencia"]
+                billing_period["energy_cost"] = gasto["importeEnergia"]
+                billing_period["rent_cost"] = gasto["importeAlquiler"]
+                billing_period["tax_cost"] = gasto["importeIVA"]
+                _LOGGER.info("CNMC: bill for %s → %.2f €", billing_period["start_date"], gasto["importeTotal"])
+            else:
+                _LOGGER.warning("CNMC: unexpected bill response for %s: %s", billing_period["start_date"], str(bill)[:200])
+    except Exception as err:
+        _LOGGER.error("CNMC: request failed for %s: %s", billing_period["start_date"], err)
 
     return billing_period, csv_data

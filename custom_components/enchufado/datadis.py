@@ -28,19 +28,20 @@ DISTRIBUTOR_CODES = {
 }
 
 
-async def _request(token: str, url: str, params: dict) -> list | dict | None:
-    """Authenticated GET against the Datadis private API."""
+async def _request(token: str, url: str, params: dict) -> tuple:
+    """Authenticated GET against the Datadis private API. Returns (data, status)."""
     headers = {"Authorization": f"Bearer {token}", "Accept-Encoding": "identity"}
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, params=params, headers=headers) as resp:
                 if resp.status == 200:
-                    return await resp.json(content_type=None)
+                    return await resp.json(content_type=None), 200
                 text = await resp.text()
                 _LOGGER.warning("Datadis %s → %s: %s", url, resp.status, text[:200])
+                return None, resp.status
     except Exception as err:
         _LOGGER.error("Datadis request to %s failed: %s", url, err)
-    return None
+    return None, None
 
 
 async def async_login(username: str, password: str) -> str | None:
@@ -63,7 +64,7 @@ async def async_get_supplies(token: str, authorized_nif: str | None = None) -> l
     if authorized_nif:
         params["authorizedNif"] = authorized_nif
 
-    data = await _request(token, _URL_SUPPLIES, params)
+    data, _ = await _request(token, _URL_SUPPLIES, params)
     if not data:
         return []
 
@@ -97,7 +98,7 @@ async def async_get_contract_detail(
     if authorized_nif:
         params["authorizedNif"] = authorized_nif
 
-    data = await _request(token, _URL_CONTRACT, params)
+    data, _ = await _request(token, _URL_CONTRACT, params)
     if not data:
         return None
 
@@ -171,14 +172,14 @@ class Datadis:
         if Datadis.authorized_nif:
             params["authorizedNif"] = Datadis.authorized_nif
 
-        data = await _request(Datadis._token, _URL_CONSUMPTION, params)
+        data, status = await _request(Datadis._token, _URL_CONSUMPTION, params)
 
-        # On 401 the token may have expired — refresh once
-        if data is None:
+        # On 401 the token may have expired — refresh once (not on 429 rate-limit)
+        if data is None and status == 401:
             Datadis._token = None
             if not await Datadis._ensure_token():
                 return {}
-            data = await _request(Datadis._token, _URL_CONSUMPTION, params)
+            data, _ = await _request(Datadis._token, _URL_CONSUMPTION, params)
 
         if not data:
             return {}
